@@ -271,11 +271,14 @@ def eval(expr, env=None):
 
         case Not(inner):
             v = eval(inner, env)
+            
             if not isinstance(v,bool):
                 raise TypeError("Not expects booleans")
-            if isinstance(v, bool):
-                return not v
+
+            if isinstance(v, int):
+                raise TypeError("Not expects booleans")
             
+            return not v
         
                
         # -- Comparisons -- #
