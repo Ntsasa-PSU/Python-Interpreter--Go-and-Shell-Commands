@@ -1,3 +1,8 @@
+from dataclasses import dataclass
+import os
+
+type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App
+
 # Literals
 class Lit:
     __match_args__ = ('value',)
@@ -74,7 +79,7 @@ class Let:
     __match_args__ = ('name', 'expr', 'body')
     
     def __init__(self, name, expr, body):
-        self.name = name        # variable name (str)
+        self.name = name        # variable name 
         self.expr = expr        # expression to bind
         self.body = body        # evaluate with new binding
 
@@ -108,14 +113,101 @@ class If:
         self.then_branch = then_branch
         self.else_branch = else_branch
 
+# Shell Commands
 
-# Evaluate
-def eval(expr, env=None):
-    if env is None:
-        env = {}
+#Value 
+@dataclass
+class Command:
+    command: str
+    __match_args__ = ('command',)
+    
+    def __eq__(self, other):
+        if not isinstance(other, Command):
+            return False
+        return self.command == other.command
 
-    match expr:
+#Operator 1
+@dataclass
+class Pipe:
+    left: 'Command | Pipe | Redirect'
+    right: 'Command | Pipe | Redirect'
+    __match_args__ = ('left', 'right')
+
+#Operator 2
+@dataclass
+class Redirect:
+    command: 'Command'
+    stream: str
+    target: str
+    __match_args__ = ('command','stream', 'target')
+
+@dataclass
+class Ifnz():
+    cond: Expr
+    thenexpr: Expr
+    elseexpr: Expr
+    def __str__(self) -> str:
+        return f"(if {self.cond} != 0 then {self.thenexpr} else {self.elseexpr})"
+    
+@dataclass
+class Letfun():
+    name: str
+    param: str
+    bodyexpr: Expr
+    inexpr: Expr
+    def __str__(self) -> str:
+        return f"letfun {self.name} ({self.param}) = {self.bodyexpr} in {self.inexpr} end"
+    
+@dataclass
+class App():
+    fun: Expr
+    arg: Expr
+    def __str__(self) -> str:
+        return f"({self.fun} ({self.arg}))"
+
+type Binding[V] = tuple[str,V]  # this tuple type is always a pair
+type Env[V] = tuple[Binding[V], ...] # this tuple type has arbitrary length 
+
+from typing import Any
+emptyEnv : Env[Any] = ()  # the empty environment has no bindings
+
+def extendEnv[V](name: str, value: V, env:Env[V]) -> Env[V]:
+    '''Return a new environment that extends the input environment 
+       env with a new binding from name to value'''
+    return ((name,value),) + env
+
+def lookupEnv[V](name: str, env: Env[V]) -> (V | None) :
+    '''Return the first value bound to name in the input environment env
+       (or raise an exception if there is no such binding)'''
+    # exercises2b.py shows a different implementation alternative
+    match env:
+        case ((n,v), *rest) :
+            if n == name:
+                return v
+            else:
+                return lookupEnv(name, rest) # type:ignore
+        case _ :
+            return None        
         
+class EvalError(Exception):
+    pass
+
+type Value = int | Closure
+
+@dataclass
+class Closure:
+    param: str
+    body: Expr
+    env: Env[Value]
+
+def eval(e: Expr, env=None) -> Value :
+
+    if env is None:
+        env = emptyEnv
+    return evalInEnv(env, e)
+
+def evalInEnv(env: Env[Value], e:Expr) -> Value:
+    match e:
         # -- Literals -- #
         
         # Case: Literal
@@ -128,31 +220,34 @@ def eval(expr, env=None):
         # -- Arithmetic Operations-- #
 
         # Case: Addition
-        # Input: int/bool
+        # Input: int
         # Output: int
         case Add(left, right):
+            # Evaluate left
             l = eval(left, env)
-            
+            # Check left
             if isinstance(l, bool):
                 raise TypeError("Add expects integers")
 
             if not isinstance(l, int):
                 raise TypeError("Add expects integers")
             
+            # Evaluate right
             r = eval(right, env)
             
-            # int + int
+            # Check right
             if not isinstance(r, int):
                 raise TypeError("Add expects integers")
             
-            if isinstance(l, bool):
+            if isinstance(r, bool):
                 raise TypeError("Add expects integers")
             
+            #  int + int
             return l + r
             
         
         # Case: Subtraction
-        # Input: int/bool
+        # Input: int
         # Output: int   
         case Sub(left, right):
             
@@ -161,16 +256,22 @@ def eval(expr, env=None):
             if not isinstance(l, int):
                 raise TypeError("Sub expects integers")
             
+            if isinstance(l, bool):
+                raise TypeError("Sub expects integers")
+            
             r = eval(right, env)
             
-            # int + int
+         
             if not isinstance(r, int):
+                raise TypeError("Sub expects integers")
+            
+            if isinstance(r, bool):
                 raise TypeError("Sub expects integers")
             
             return l - r
         
         # Case: Multiplication
-        # Input: int/bool
+        # Input: int
         # Output: int 
         case Mul(left, right):
             l = eval(left, env)
@@ -179,13 +280,12 @@ def eval(expr, env=None):
                 raise TypeError("Mul expects integers")
             
             if isinstance(l, bool):
-                raise TypeError("Add expects integers") 
+                raise TypeError("Mul expects integers") 
             
             r = eval(right, env)
             
-            # int + int
             if isinstance(r, bool):
-                raise TypeError("Add expects integers")
+                raise TypeError("Mul expects integers")
             
             if not isinstance(r, int):
                 raise TypeError("Mul expects integers")
@@ -193,25 +293,24 @@ def eval(expr, env=None):
             return l * r
         
         # Case: Division
-        # Input: int/bool
+        # Input: int
         # Output: int 
         case Div(left, right):
             l = eval(left, env)
             
             if not isinstance(l, int):
-                raise TypeError("Mul expects integers")
+                raise TypeError("Div expects integers")
             
             if isinstance(l, bool):
-                raise TypeError("Add expects integers") 
+                raise TypeError("Div expects integers") 
             
             r = eval(right, env)
             
-            # int + int
             if isinstance(r, bool):
-                raise TypeError("Add expects integers")
+                raise TypeError("Div expects integers")
             
             if not isinstance(r, int):
-                raise TypeError("Add expects integers")
+                raise TypeError("Div expects integers")
             
             if r == 0:
                 raise ZeroDivisionError("Division by zero")
@@ -220,7 +319,7 @@ def eval(expr, env=None):
                 
         
         # Case: Negative
-        # Input: int/bool
+        # Input: int
         # Output: int 
         case Neg(inner):
             v = eval(inner, env)
@@ -237,16 +336,17 @@ def eval(expr, env=None):
         # -- Boolean Expressions -- #
         
         case And(left, right):
+            # Evaluate left
             l = eval(left, env)
-            
+            # Check left
             if not isinstance(l, bool):
                 raise Exception("And expects booleans.")
-            
+            # If this was false, we can shorthand the evaluation
             if not l:
                 return False
-            
+            # Evaluate right
             r = eval(right, env)
-            
+            # Check right
             if not isinstance(r, bool):
                 raise Exception("And expects booleans.")
             
@@ -274,11 +374,10 @@ def eval(expr, env=None):
             
             if not isinstance(v,bool):
                 raise TypeError("Not expects booleans")
-
-            if isinstance(v, int):
-                raise TypeError("Not expects booleans")
             
-            return not v
+            if isinstance(v, bool):
+                return not v
+            
         
                
         # -- Comparisons -- #
@@ -287,29 +386,43 @@ def eval(expr, env=None):
             l = eval(left, env)
             r = eval(right, env)
 
+            # Check if types are the same
             if type(l) != type(r):
                 return False
 
             return l == r
 
         case Lt(left, right):
+            # Can shorthand like boolean logic
             l = eval(left, env)
+            
+            if not isinstance(l, int):
+                raise TypeError("Lt expects integers")
+            
+            if isinstance(l, bool):
+                raise TypeError("Lt expects integers") 
+            
             r = eval(right, env)
             
-            if isinstance(l, int) and isinstance(r, int):
-                return l < r
+            if isinstance(r, bool):
+                raise TypeError("Lt expects integers")
             
-            raise Exception("Lt expects expressions that evaluate to integers.")
+            if not isinstance(r, int):
+                raise TypeError("Lt expects integers")
+            
+            return l < r  
 
 
         # -- Conditional -- #
         
         case If(cond, then_branch, else_branch):
+            # Evaluate condition in current environment
             test = eval(cond, env)
             
             # If test is not a boolean, raise an exception
             if not isinstance(test, bool):
                 raise Exception("If condition must be a boolean")
+            
             
             # If test is true, evaluate then_branch
             if test:
@@ -325,7 +438,7 @@ def eval(expr, env=None):
         case Let(name, value_expr, body_expr):
             # Evaluate in current environment
             value = eval(value_expr, env)
-            # Create a new environment  as a copy
+            # Create a new environment as a copy
             new_env = env.copy()
             # Bind name to value in new environment
             new_env[name] = value
@@ -336,19 +449,94 @@ def eval(expr, env=None):
             # Check if name in environment
             if name in env:
                 return env[name]
+            
             raise Exception(f"Unbound variable: {name}")
         
         
-        # -- Unknown -- #
-        case _:
-            raise Exception(f"Unknown expression: {expr}")  
+        # -- Shell -- #
+        case Command(command_string):
+            # Split the command into parts
+            parts = command_string.split()
+            processed_parts = []
+            
+            # Process each part for variable substitution
+            for part in parts:
+                if part.startswith('$'):
+                    var_name = part[1:]
+                    var_value = lookupEnv(var_name, env)
+                    if var_value is None:
+                        raise EvalError(f"Undefined variable: {var_name}")
+                    processed_parts.append(str(var_value))
+                else:
+                    processed_parts.append(part)
+            
+            # Ensure we have at least one part (the command)
+            if not processed_parts:
+                raise EvalError("Empty command")
+            
+            return {
+                'type': 'command',
+                'executable': processed_parts[0],
+                'args': processed_parts[1:],
+                'redirects': {}
+            }
+            
+        case Pipe(left, right):
+  
+            left_value = eval(left, env)
+            right_value = eval(right, env)
+            
+            if left_value['type'] != 'command':
+                raise ValueError("Left side of pipe must be a command")
+            if right_value['type'] != 'command':
+                raise ValueError("Right side of pipe must be a command")
+            
+            # Unpack left_value, get pipes, and append right_value
+            return {
+                **left_value, 'pipes': [*left_value.get('pipes', []), right_value]
+            }
+            
+        case Redirect(command, stream, target):
+            if stream not in ['stdin', 'stdout', 'stderr']:
+                raise ValueError(f"Invalid stream: {stream}")
+            
+            #Exec IN FUTURE
+            value = eval(command, env)
+            
+            return {
+                **value, 'redirects': [value.get('redirects', []), {stream: target}]
+            }
+            
+        case Ifnz(c,t,e):
+            match evalInEnv(env,c):
+                case 0:
+                    return evalInEnv(env,e)
+                case _:
+                    return evalInEnv(env,t)
+        
+        case Letfun(n,p,b,i):
+            c = Closure(p,b,env)
+            newEnv = extendEnv(n,c,env)
+            c.env = newEnv        
+            return evalInEnv(newEnv,i)
+        
+        case App(f,a):
+            fun = evalInEnv(env,f)
+            arg = evalInEnv(env,a)
+            match fun:
+                case Closure(p,b,cenv):
+                    newEnv = extendEnv(p,arg,cenv) 
+                    return evalInEnv(newEnv,b)
+                case _:
+                    raise EvalError("application of non-function")
 
-    
-def run(expr):
-    result = eval(expr, {})
-    print(f"Result: {result}")
-        
-        
-        
+
+def run(e: Expr) -> None:
+    print(f"running: {e}")
+    try:
+        i = eval(e)
+        print(f"result: {i}")
+    except EvalError as err:
+        print(err)
         
         

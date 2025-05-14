@@ -1,0 +1,42 @@
+%import common.INT -> INT
+%import common.CNAME -> ID
+%import common.WS
+
+%ignore WS
+
+%import common.INT -> INT
+%import common.CNAME -> ID
+%import common.WS
+%ignore WS
+
+// Top-level expression rule
+?expr: expr "||" expr -> or
+     | expr "&&" expr -> and
+     | expr "==" expr -> eq
+     | expr "<" expr -> lt
+     | expr "+" expr -> plus
+     | expr "-" expr -> minus
+     | expr "*" expr -> times
+     | expr "/" expr -> divide
+     | "!" expr -> not
+     | "-" expr -> neg
+     | atom
+
+?atom: INT -> int
+     | ID -> id
+     | atom "(" expr ")" -> app
+     | "(" expr ")"
+     | "let" ID "=" expr "in" expr "end" -> let
+     | "letfun" ID "(" ID ")" "=" expr "in" expr "end" -> letfun
+     | SHELL_CMD -> command
+     | shell_pipe
+     | shell_redirect
+     | shell_append
+
+// Shell support
+SHELL_CMD: "`" /[^`]+/ "`"
+SHELL_VAR: "$" ID
+
+?shell_pipe: atom "|" atom -> pipe
+?shell_redirect: atom ">" atom -> redirect
+?shell_append: atom ">>" atom -> append 
