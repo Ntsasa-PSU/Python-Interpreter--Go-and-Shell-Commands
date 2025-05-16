@@ -1,42 +1,78 @@
-%import common.INT -> INT
-%import common.CNAME -> ID
-%import common.WS
+%import common.INT              
+%import common.CNAME -> ID     
+%import common.WS_INLINE
+%import common.NEWLINE
 
-%ignore WS
+%ignore WS_INLINE                     
+%ignore NEWLINE
 
-%import common.INT -> INT
-%import common.CNAME -> ID
-%import common.WS
-%ignore WS
+start: expr                    // Basic expression structure
+?expr: if_expr | or_expr | shell_expr      // Add shell_expr as an option
 
-// Top-level expression rule
-?expr: expr "||" expr -> or
-     | expr "&&" expr -> and
-     | expr "==" expr -> eq
-     | expr "<" expr -> lt
-     | expr "+" expr -> plus
-     | expr "-" expr -> minus
-     | expr "*" expr -> times
-     | expr "/" expr -> divide
-     | "!" expr -> not
-     | "-" expr -> neg
-     | atom
+// Control flow
+?if_expr: "if" expr "then" expr "else" expr -> if_  // Basic if-then-else structure
 
-?atom: INT -> int
-     | ID -> id
-     | atom "(" expr ")" -> app
-     | "(" expr ")"
-     | "let" ID "=" expr "in" expr "end" -> let
-     | "letfun" ID "(" ID ")" "=" expr "in" expr "end" -> letfun
-     | SHELL_CMD -> command
-     | shell_pipe
-     | shell_redirect
-     | shell_append
+// Logical operations
+?or_expr: and_expr ("||" and_expr)* -> or_expr      // Handles OR operations
+?and_expr: not_expr ("&&" not_expr)* -> and_expr    // Handles AND operations
+?not_expr: "!" not_expr -> not_op                   // Handles NOT operation
+        | cmp_expr
 
-// Shell support
-SHELL_CMD: "`" /[^`]+/ "`"
-SHELL_VAR: "$" ID
+// Comparison operations
+?cmp_expr: add_expr
+        | add_expr eq_op add_expr -> eq             // Equality comparison
+        | add_expr lt_op add_expr -> lt             // Less than comparison
 
-?shell_pipe: atom "|" atom -> pipe
-?shell_redirect: atom ">" atom -> redirect
-?shell_append: atom ">>" atom -> append 
+// Arithmetic operations
+?add_expr: mul_expr
+        | add_expr plus_op mul_expr -> add          // Addition
+        | add_expr minus_op mul_expr -> sub         // Subtraction
+
+?mul_expr: neg_expr
+        | mul_expr times_op neg_expr -> mul         // Multiplication
+        | mul_expr div_op neg_expr -> div           // Division
+
+// Unary operations
+?neg_expr: "-" neg_expr -> neg_op                   // Negation
+        | app_expr
+
+// Function application
+?app_expr: primary_expr ("(" expr ")")* -> app      // Function calls
+
+// Basic expressions
+?primary_expr: INT -> int                           // Integer literals
+            | "true" -> true                        // Boolean true
+            | "false" -> false                      // Boolean false
+            | ID -> id                              // Variables
+            | "(" expr ")"                          // Parenthesized expressions
+            | let_expr                              // Let bindings
+            | letfun_expr                           // Function definitions
+
+// Variable and function definitions
+?let_expr: "let" ID "=" expr "in" expr "end" -> let           // Variable binding
+?letfun_expr: "letfun" ID "(" ID ")" "=" expr "in" expr "end" -> letfun  // Function definition
+
+// Operators
+eq_op: "==" 
+lt_op: "<"
+plus_op: "+"
+minus_op: "-"
+times_op: "*"
+div_op: "/"
+
+// Shell command operations
+?shell_expr: command_expr
+          | pipe_expr
+          | redirect_expr
+
+?command_expr: BACKTICK command_content BACKTICK -> command
+
+?pipe_expr: command_expr "|" command_expr -> pipe
+         | pipe_expr "|" command_expr -> pipe
+
+?redirect_expr: command_expr ">" command_expr -> redirect
+             | pipe_expr ">" command_expr -> redirect
+
+// Define tokens for shell commands
+BACKTICK: "`"
+command_content: /[^ `\t\r\n]+( [^ `\t\r\n]+)*/

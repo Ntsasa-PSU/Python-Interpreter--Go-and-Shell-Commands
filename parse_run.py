@@ -1,10 +1,10 @@
-from interp_fun import Add, Sub, Mul, Div, Neg, Let, Name, Lit, Command, Pipe, Redirect, Ifnz, Letfun, App, Expr, run
+from interp_fun import Add, Sub, Mul, Div, Neg, Let, Name, Lit, Command, And, Or, Not, Eq, Lt, If, Pipe, Redirect, Ifnz, Letfun, App, Expr, run
 
-from lark import Lark, Token, ParseTree, Transformer
+from lark import Lark, Token, ParseTree, Transformer, Tree
 from lark.exceptions import VisitError
 from pathlib import Path
 
-parser = Lark(Path('expr_fun.lark').read_text(),start='expr', parser='earley',ambiguity='explicit')
+parser = Lark(Path('expr_fun.lark').read_text(), start='expr', parser='lalr', strict=True)
 
 class ParseError(Exception): 
     pass
@@ -31,55 +31,195 @@ class ToExpr(Transformer[Token,Expr]):
     # (We cheat by declaring the args as tuples rather than lists, since
     # this let's us be more precise about the types of the elements.)
     # Fail if tree contains ambiguity markers
-    def plus(self, args:tuple[Expr,Expr]) -> Expr:
-        return Add(args[0],args[1])
-    def times(self, args:tuple[Expr,Expr]) -> Expr:
-        return Mul(args[0],args[1])
-    def minus(self, args:tuple[Expr,Expr]) -> Expr:
-        return Sub(args[0],args[1])
-    def divide(self, args:tuple[Expr,Expr]) -> Expr:
-        return Div(args[0],args[1])
-    def neg(self, args:tuple[Expr]) -> Expr:
-        return Neg(args[0])
-    def let(self, args:tuple[Token,Expr,Expr]) -> Expr:
-        return Let(args[0].value,args[1],args[2]) 
-    def id(self, args:tuple[Token]) -> Expr:
-        return Name(args[0].value)
-    def int(self,args:tuple[Token]) -> Expr:
-        return Lit(int(args[0].value))
-    def ifnz(self,args:tuple[Expr,Expr,Expr]) -> Expr:
-        return Ifnz(args[0],args[1],args[2])
-    def letfun(self,args:tuple[Token,Token,Expr,Expr]) -> Expr:
-        return Letfun(args[0].value,args[1].value,args[2],args[3])
-    def app(self,args:tuple[Expr,Expr]) -> Expr:
-        return App(args[0],args[1]) 
+    # Basic literal and identifier handlers
+    def true(self, args) -> Expr:
+        return Lit(value=True)  
     
-    def command(self, args: tuple[Token]) -> Expr:
-        # Remove backticks and get the command string
-        cmd_str = args[0].value[1:-1].strip()
+    def false(self, args) -> Expr:
+        return Lit(value=False)  
+    
+    def id(self, args) -> Expr:
+        return Name(name=args[0].value)  
+
+    def int(self, args) -> Expr:
+        return Lit(value=int(args[0].value))  
+
+    # Logical operation handlers
+    def or_expr(self, args) -> Expr:
+        if len(args) == 1:
+            return args[0]  # Single term
+        result = args[0]
+        for arg in args[1:]:  # Chain OR operations left-to-right
+            result = Or(left=result, right=arg)
+        return result
+
+    def and_expr(self, args) -> Expr:
+        if len(args) == 1:
+            return args[0]  # Single term
+        result = args[0]
+        for arg in args[1:]:  # Chain AND operations left-to-right
+            result = And(left=result, right=arg)
+        return result
+
+    def not_op(self, args) -> Expr:
+        return Not(expr=args[0])  # NOT operation
+
+    # Comparison operation handlers
+    def cmp_expr(self, args) -> Expr:
+        if len(args) == 1:
+            return args[0]  # Single term
+        if len(args) == 3:  # Binary comparison
+            if args[1].type == 'eq_op':
+                return Eq(left=args[0], right=args[2])  # Equality comparison
+            elif args[1].type == 'lt_op':
+                return Lt(left=args[0], right=args[2])  # Less than comparison
+        raise ParseError(f"Invalid comparison expression: {args}")
+
+    # Arithmetic operation handlers
+    def add_expr(self, args) -> Expr:
+        if len(args) == 1:
+            return args[0]  # Single term
+        result = args[0]
+        for i in range(1, len(args), 2):  # Process operator and right operand pairs
+            op, rhs = args[i], args[i+1]
+            if isinstance(op, Token):
+                op = op.value
+            if op == '+':
+                result = Add(left=result, right=rhs)
+            elif op == '-':
+                result = Sub(left=result, right=rhs)
+        return result
+
+    def mul_expr(self, args) -> Expr:
+        if len(args) == 1:
+            return args[0]
+        result = args[0]
+        for i in range(1, len(args), 2):
+            op, rhs = args[i], args[i+1]
+            if isinstance(op, Token):
+                op = op.value
+            if op == '*':
+                result = Mul(left=result, right=rhs)
+            elif op == '/':
+                result = Div(left=result, right=rhs)
+        return result
+
+    def unary_op(self, args) -> Expr:
+        op = args[0].value if isinstance(args[0], Token) else args[0]
+        expr = args[1]
+        
+        if op == '!':
+            return Not(expr)
+        elif op == '-':
+            return Neg(expr)
+            
+        raise ParseError(f"Invalid unary operator: {op}")
+    
+    def neg_op(self, args) -> Expr:
+        if len(args) != 1:
+            raise ParseError("Negation requires exactly one argument")
+        return Neg(expr=args[0])
+
+    def if_(self, args) -> Expr:
+        return If(cond=args[0], then_branch=args[1], else_branch=args[2])
+        
+    def let(self, args) -> Expr:
+        return Let(name=args[0].value, expr=args[1], body=args[2])
+        
+    def letfun(self, args) -> Expr:
+        return Letfun(name=args[0].value, param=args[1].value, 
+                     bodyexpr=args[2], inexpr=args[3])
+
+    def app(self, args) -> Expr:
+        if len(args) == 1:
+            return args[0]
+        result = args[0]
+        for arg in args[1:]:
+            result = App(fun=result, arg=arg)
+        return result
+    
+    def command(self, args) -> Expr:
+        # args[0] contains the command content token
+        # Strip any whitespace and remove the COMMAND_TEXT
+        cmd_str = args[0].value.strip()
         return Command(cmd_str)
     
-    def pipe(self, args:tuple[Expr,Expr]) -> Expr:
+    def pipe(self, args) -> Expr:
+        # args[0] is left command, args[1] is right command
         return Pipe(args[0], args[1])
     
-    def redirect(self, args:tuple[Expr,Token,Expr]) -> Expr:
+    def redirect(self, args) -> Expr:
+        # args[0] is source command, args[1] is target
+        # "stdout" is the default stream
         return Redirect(args[0], "stdout", args[1])
     
-    def _ambig(self,_) -> Expr:    # ambiguity marker
-        raise AmbiguousParse()
+    def add(self, args) -> Expr:
+        assert len(args) == 3
+        return Add(left=args[0], right=args[2])
+
+    def sub(self, args) -> Expr:
+        assert len(args) == 3
+        return Sub(left=args[0], right=args[2])
+
+    def mul(self, args) -> Expr:
+        assert len(args) == 3
+        return Mul(left=args[0], right=args[2])
+
+    def div(self, args) -> Expr:
+        assert len(args) == 3
+        return Div(left=args[0], right=args[2])
+
+    def eq(self, args) -> Expr:
+        assert len(args) == 3
+        return Eq(left=args[0], right=args[2])
+
+    def lt(self, args) -> Expr:
+        assert len(args) == 3 
+        return Lt(left=args[0], right=args[2])
+
+    def _ambig(self, args) -> Expr:
+        print("DEBUG _ambig: got", len(args), "options")
+        for i, arg in enumerate(args):
+            print(f"  Option {i}: type={type(arg)}, repr={repr(arg)}")
+            try:
+                result = self.transform(arg)
+                print(f"    transform result: {repr(result)}")
+                if result is not None:
+                    return result
+            except Exception as e:
+                print(f"    transform raised: {e}")
+                continue
+        print("DEBUG _ambig: all options returned None")
+        return None
 
 
 def genAST(t:ParseTree) -> Expr:
     '''Applies the transformer to convert a parse tree into an AST'''
-    # boilerplate to catch potential ambiguity error raised by transformer
     try:
         return ToExpr().transform(t)               
     except VisitError as e:
-        if isinstance(e.orig_exc,AmbiguousParse):
+        if isinstance(e.orig_exc, AmbiguousParse):
             raise AmbiguousParse()
         else:
             raise e
         
+def just_parse(s:str) -> (Expr|None):   
+    '''Parses and pretty-prints an expression'''
+    try:
+        t = parse(s)
+        print("raw:", t)
+        print("pretty:")
+        print(t.pretty())
+        ast = genAST(t)
+        print("raw AST:", repr(ast))  # use repr() to avoid str() pretty-printing
+        return ast
+    except AmbiguousParse:
+        print("ambiguous parse")
+        return None
+    except Exception as e:
+        print(f"Error parsing: {e}")
+        return None
+                
 def parse_and_run(s: str) -> None:
     """Parse string s into an AST and run it"""
     try:
@@ -92,5 +232,27 @@ def parse_and_run(s: str) -> None:
         print("Ambiguous parse")
         
 print("Shell command test:")
-parse_and_run('`ls -l`')
-    
+parse_and_run('`ls -l`')  # Command must be wrapped in backticks
+parse_and_run('`ls -l` | `grep .py`')  # Test pipe
+parse_and_run('`ls -l` > `output.txt`')  # Test redirect
+
+print("Shell Command Tests:")
+print("\n1. Basic Commands:")
+parse_and_run('`dir`')                     # Simple directory listing
+parse_and_run('`echo hello`')              # Echo command
+parse_and_run('`pwd`')                     # Print working directory
+
+print("\n2. Pipe Operations:")
+parse_and_run('`dir` | `grep .py`')        # Find Python files
+parse_and_run('`type file.txt` | `sort`')  # Sort file contents
+parse_and_run('`dir` | `grep .py` | `wc -l`')  # Count Python files
+
+print("\n3. Redirect Operations:")
+parse_and_run('`dir` > `dir_list.txt`')    # Save directory listing
+parse_and_run('`echo test` > `test.txt`')  # Create text file
+parse_and_run('`type file.txt` > `copy.txt`')  # Copy file content
+
+print("\n4. Complex Operations:")
+parse_and_run('`dir` | `grep .py` > `python_files.txt`')  # Find and save Python files
+parse_and_run('`type test.txt` | `sort` > `sorted.txt`')  # Sort and save
+parse_and_run('`dir /s` | `grep .txt` | `wc -l` > `count.txt`')  # Count and save
