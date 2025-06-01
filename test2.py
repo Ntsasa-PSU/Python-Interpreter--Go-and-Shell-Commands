@@ -3,7 +3,7 @@
 import unittest
 import interp_fun as interp
 from interp_fun import Lit, Add, Sub, Mul, Div, Neg, And, Or, Not, \
-    Let, Name, Eq, Lt, If, Letfun, App
+    Let, Name, Eq, Lt, If, Letfun, App, Assign, Show, Read
 
 
 from io import StringIO

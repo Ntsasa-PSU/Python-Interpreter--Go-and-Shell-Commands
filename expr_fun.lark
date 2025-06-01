@@ -10,14 +10,20 @@ start: expr
 
 ?expr: seq_expr | shell_expr
 
-?seq_expr: assign_expr
-         | assign_expr ";" seq_expr -> seq
+// Top-level sequence - lowest precedence
+?seq_expr: if_expr (";" if_expr)* -> seq
 
-?assign_expr: or_expr
+// If expressions - use non-sequence expressions for condition to avoid conflicts
+?if_expr: assign_expr
+        | "if" assign_expr "then" if_expr "else" if_expr -> if_
+
+// Assignment expression
+?assign_expr: show_expr
             | ID ":=" assign_expr   -> assign
 
-// Control flow
-?if_expr: "if" expr "then" expr "else" expr -> if_  // Basic if-then-else structure
+// Show expression - allow if expressions
+?show_expr: or_expr
+          | "show" if_expr      -> show
 
 // Logical operations
 ?or_expr: and_expr ("||" and_expr)* -> or_expr      // Handles OR operations
@@ -47,14 +53,15 @@ start: expr
 // Function application
 ?app_expr: primary_expr ("(" expr ")")* -> app      // Function calls
 
-// Basic expressions
-?primary_expr: INT -> int                           // Integer literals
-            | "true" -> true                        // Boolean true
-            | "false" -> false                      // Boolean false
-            | ID -> id                              // Variables
-            | "(" expr ")"                          // Parenthesized expressions
-            | let_expr                              // Let bindings
-            | letfun_expr                           // Function definitions
+// Basic expressions - allow parenthesized sequences
+?primary_expr: INT -> int
+            | "true" -> true
+            | "false" -> false
+            | ID -> id
+            | "(" expr ")"
+            | let_expr
+            | letfun_expr
+            | "read" -> read
 
 // Variable and function definitions
 ?let_expr: "let" ID "=" expr "in" expr "end" -> let           // Variable binding

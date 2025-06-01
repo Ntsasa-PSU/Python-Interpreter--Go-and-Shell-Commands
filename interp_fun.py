@@ -6,7 +6,7 @@ from typing import Dict
 
 
 
-type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App | Assign | Seq
+type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App | Assign | Seq | Show | Command | Pipe | Redirect | If | And | Or | Not | Eq | Lt
 #| Read | Show | Assign | Seq
 
 
@@ -16,20 +16,25 @@ type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App
 # Literals
 class Store:
     def __init__(self):
-        self._data: Dict[int, Any] = {}
+        self._data = []  # Use a list instead of dict since we need sequential storage
         self._next_loc = 0
 
     def alloc(self, value):
         loc = self._next_loc
-        self._data[loc] = value
+        self._data.append(value)  # Simply append to list
         self._next_loc += 1
         return loc
 
     def get(self, loc):
-        return self._data[loc]
+        if 0 <= loc < len(self._data):
+            return self._data[loc]
+        raise KeyError(f"Invalid location: {loc}")
 
     def set(self, loc, value):
-        self._data[loc] = value
+        if 0 <= loc < len(self._data):
+            self._data[loc] = value
+        else:
+            raise KeyError(f"Invalid location: {loc}")
 
     def copy(self):
         new_store = Store()
@@ -342,7 +347,15 @@ class Seq:
     first: Expr
     second: Expr
     __match_args__ = ('first', 'second')
-
+    
+@dataclass
+class Show:
+    expr: Expr
+    __match_args__ = ('expr',)
+    
+@dataclass
+class Read:
+    __match_args__ = ()
 
 Binding = tuple[str, int]  # name to location
 Env = tuple[Binding, ...]
@@ -465,7 +478,7 @@ def evalInEnv(env: Env, store: Store, e: Expr):
 
         case Neg(expr):
 
-            v =  evalInEnv(env, store, v)
+            v =  evalInEnv(env, store, expr)
 
             if not isinstance(v, int):
 
@@ -523,9 +536,7 @@ def evalInEnv(env: Env, store: Store, e: Expr):
 
         case Not(expr):
 
-            v = evalInEnv(env, store, v)
-
-
+            v = evalInEnv(env, store, expr)
             if not isinstance(v, bool):
 
                 raise TypeError("Not expects booleans")
@@ -535,40 +546,24 @@ def evalInEnv(env: Env, store: Store, e: Expr):
         
 
         case Eq(left, right):
-
-            l = eval(left, env)
-
-            r = eval(right, env)
-
+            l = evalInEnv(env, store, left)
+            r = evalInEnv(env, store, right)
             if type(l) != type(r):
-
                 return False
-
             return l == r
 
-
         case Lt(left, right):
-
-            l = eval(left, env)
-
-            r = eval(right, env)
-
+            l = evalInEnv(env, store, left)
+            r = evalInEnv(env, store, right)
             if not all(isinstance(x, int) for x in (l, r)):
-
                 raise TypeError("Lt expects integers")
-
             return l < r
 
-
         case If(cond, then_branch, else_branch):
-
-            test = eval(cond, env)
-
+            test = evalInEnv(env, store, cond)
             if not isinstance(test, bool):
-
                 raise TypeError("If condition must be a boolean")
-
-            return eval(then_branch if test else else_branch, env)
+            return evalInEnv(env, store, then_branch if test else else_branch)
 
         
 
@@ -595,8 +590,17 @@ def evalInEnv(env: Env, store: Store, e: Expr):
             loc = lookupEnv(name, env)
             if loc is None:
                 raise EvalError(f"Assignment to unbound variable: {name}")
+            # Check if the variable contains a function
+            current_value = store.get(loc)
+            if isinstance(current_value, Closure):
+                raise EvalError(f"Cannot assign to function: {name}")
             val = evalInEnv(env, store, expr)
             store.set(loc, val)
+            return val
+        
+        case Show(expr):
+            val = evalInEnv(env, store, expr)
+            print(val)  # or use your display logic
             return val
 
         # -- Shell -- #
@@ -709,15 +713,14 @@ def evalInEnv(env: Env, store: Store, e: Expr):
 
         case Ifnz(c,t,e):
 
-            match evalInEnv(env,c):
-
+            val = evalInEnv(env, store, c)
+            if not isinstance(val, int):
+                raise TypeError("Ifnz condition must be an integer")
+            match val:
                 case 0:
-
-                    return evalInEnv(env,e)
-
+                    return evalInEnv(env, store, e)
                 case _:
-
-                    return evalInEnv(env,t)
+                    return evalInEnv(env, store, t)
 
         
 
@@ -725,48 +728,46 @@ def evalInEnv(env: Env, store: Store, e: Expr):
 
             c = Closure(p,b,env)
 
-            newEnv = extendEnv(n,c,env)
+            loc = store.alloc(c)
+
+            newEnv = extendEnv(n, loc, env)
+
+            # Update the closure's environment to include itself for recursion
 
             c.env = newEnv        
 
-            return evalInEnv(newEnv,i)
+            return evalInEnv(newEnv, store, i)
 
         
 
         case App(f,a):
-
-            fun = evalInEnv(env,f)
-
-            arg = evalInEnv(env,a)
-
+            fun = evalInEnv(env, store, f)
+            arg = evalInEnv(env, store, a)
             match fun:
-
                 case Closure(p,b,cenv):
-                    newEnv = extendEnv(p,arg,cenv) 
-
-                    return evalInEnv(newEnv,b)
-
+                    arg_loc = store.alloc(arg)
+                    newEnv = extendEnv(p, arg_loc, cenv) 
+                    return evalInEnv(newEnv, store, b)
                 case _:
                     raise EvalError("application of non-function")
 
         case Seq(first, second):
             evalInEnv(env, store, first)   # Evaluate the first expression, discard its result
             return evalInEnv(env, store, second)  # Return the result of the second expression
-
+        
+        case Read():
+            s = input("Enter an integer: ")
+            try:
+                return int(s)
+            except Exception:
+                raise EvalError("Input was not an integer")
 
 
 def run(e: Expr) -> None:
-
     print(f"running: {e}")
-
     try:
-
         i = eval(e)
-
         print(f"result: {i}")
-
     except EvalError as err:
-
         print(err)
-
 

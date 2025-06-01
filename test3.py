@@ -2,9 +2,10 @@
 
 import unittest
 import interp_fun
+interp = interp_fun
 from interp_fun  import Expr, Lit, Add, Sub, Mul, Div, Neg, And, Or, Not, \
                   Let, Name, Eq, Lt, If, Letfun, App, \
-                  Assign, Seq \
+                  Assign, Seq, Read, Show \
 
 
 from io import StringIO
