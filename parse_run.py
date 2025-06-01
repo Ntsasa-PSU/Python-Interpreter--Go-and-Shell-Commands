@@ -1,4 +1,5 @@
-from interp_fun import Add, Sub, Mul, Div, Neg, Let, Name, Lit, Command, And, Or, Not, Eq, Lt, If, Pipe, Redirect, Ifnz, Letfun, App, Expr, run
+from interp_fun import Add, Sub, Mul, Div, Neg, Let, Name, Lit, Command, And, Or, Not, Eq, Lt, If, Pipe, Redirect, Ifnz, Letfun, App, Expr, Assign, Seq, run
+#Read, Show, Assign, Seq, run
 
 from lark import Lark, Token, ParseTree, Transformer, Tree
 from lark.exceptions import VisitError
@@ -191,7 +192,13 @@ class ToExpr(Transformer[Token,Expr]):
                 continue
         print("DEBUG _ambig: all options returned None")
         return None
+    
+    def assign(self, args) -> Expr:
+        # args[0] is Token(ID), args[1] is Expr
+        return Assign(name=args[0].value, expr=args[1])
 
+    def seq(self, args) -> Expr:
+        return Seq(first=args[0], second=args[1])
 
 def genAST(t:ParseTree) -> Expr:
     '''Applies the transformer to convert a parse tree into an AST'''
@@ -230,7 +237,10 @@ def parse_and_run(s: str) -> None:
         print(f"Parse error: {e}")
     except AmbiguousParse:
         print("Ambiguous parse")
-        
+
+parse_and_run('let x = 5 in x := 7; x end')
+
+'''
 print("Shell command test:")
 parse_and_run('`ls -l`')  # Command must be wrapped in backticks
 parse_and_run('`ls -l` | `grep .py`')  # Test pipe
@@ -256,3 +266,35 @@ print("\n4. Complex Operations:")
 parse_and_run('`dir` | `grep .py` > `python_files.txt`')  # Find and save Python files
 parse_and_run('`type test.txt` | `sort` > `sorted.txt`')  # Sort and save
 parse_and_run('`dir /s` | `grep .txt` | `wc -l` > `count.txt`')  # Count and save
+'''
+print("Assignment and Sequencing Tests:")
+
+# Simple assignment and use
+parse_and_run('let x = 1 in x := 2; x end')  # Should print 2
+
+# Multiple assignments
+parse_and_run('let x = 10 in x := x + 5; x := x * 2; x end')  # Should print 30
+
+# Assignment does not affect shadowed variables
+parse_and_run('let x = 3 in let x = 4 in x := 5; x end; x end')  # Should print 3
+
+# Assignment to variable, then use in another let
+parse_and_run('let x = 7 in x := 8; let y = x in y end end')  # Should print 8
+
+# Sequencing with no assignment
+parse_and_run('let x = 1 in x; x + 1 end')  # Should print 2
+
+# Assignment returns the assigned value
+parse_and_run('let x = 0 in (x := 42) + 1 end')  # Should print 43
+
+# Chained assignments
+parse_and_run('let x = 1 in x := 2; x := 3; x end')  # Should print 3
+
+# Assignment in function argument
+parse_and_run('let x = 5 in let inc(y) = (x := x + y) in inc(2); x end end')  # Should print 7
+
+# Assignment to unbound variable (should raise an error)
+try:
+    parse_and_run('x := 5')
+except Exception as e:
+    print("Expected error:", e)

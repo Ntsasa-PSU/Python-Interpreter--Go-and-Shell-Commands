@@ -6,8 +6,15 @@
 %ignore WS_INLINE                     
 %ignore NEWLINE
 
-start: expr                    // Basic expression structure
-?expr: if_expr | or_expr | shell_expr      // Add shell_expr as an option
+start: expr
+
+?expr: seq_expr | shell_expr
+
+?seq_expr: assign_expr
+         | assign_expr ";" seq_expr -> seq
+
+?assign_expr: or_expr
+            | ID ":=" assign_expr   -> assign
 
 // Control flow
 ?if_expr: "if" expr "then" expr "else" expr -> if_  // Basic if-then-else structure
@@ -35,6 +42,7 @@ start: expr                    // Basic expression structure
 // Unary operations
 ?neg_expr: "-" neg_expr -> neg_op                   // Negation
         | app_expr
+
 
 // Function application
 ?app_expr: primary_expr ("(" expr ")")* -> app      // Function calls
