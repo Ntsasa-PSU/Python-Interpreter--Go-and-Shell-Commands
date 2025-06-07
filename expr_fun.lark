@@ -2,18 +2,22 @@
 %import common.CNAME -> ID     
 %import common.WS_INLINE
 %import common.NEWLINE
+%import common.ESCAPED_STRING
 
 %ignore WS_INLINE                     
 %ignore NEWLINE
 
 start: expr
 
-?expr: seq_expr | shell_expr
+?expr: seq_expr
 
-// Top-level sequence - lowest precedence
-?seq_expr: if_expr (";" if_expr)* -> seq
+// Top-level sequence - lowest precedence, allow both regular and shell expressions
+?seq_expr: seq_item (";" seq_item)* -> seq
 
-// If expressions - use non-sequence expressions for condition to avoid conflicts
+// Items that can be in a sequence
+?seq_item: if_expr | shell_expr
+
+// If expressions 
 ?if_expr: assign_expr
         | "if" assign_expr "then" if_expr "else" if_expr -> if_
 
@@ -35,6 +39,7 @@ start: expr
 ?cmp_expr: add_expr
         | add_expr eq_op add_expr -> eq             // Equality comparison
         | add_expr lt_op add_expr -> lt             // Less than comparison
+        | add_expr gt_op add_expr -> gt             // Greater than comparison
 
 // Arithmetic operations
 ?add_expr: mul_expr
@@ -58,6 +63,7 @@ start: expr
             | "true" -> true
             | "false" -> false
             | ID -> id
+            | ESCAPED_STRING -> string
             | "(" expr ")"
             | let_expr
             | letfun_expr
@@ -70,23 +76,28 @@ start: expr
 // Operators
 eq_op: "==" 
 lt_op: "<"
+gt_op: ">"
 plus_op: "+"
 minus_op: "-"
 times_op: "*"
 div_op: "/"
 
-// Shell command operations
-?shell_expr: command_expr
-          | pipe_expr
-          | redirect_expr
+// Shell command operations - fix precedence and conflicts
+?shell_expr: shell_or_expr
+
+?shell_or_expr: shell_and_expr
+              | shell_or_expr "||" shell_and_expr -> shell_or
+
+?shell_and_expr: shell_pipe_expr
+               | shell_and_expr "&&" shell_pipe_expr -> shell_and
+
+?shell_pipe_expr: shell_redirect_expr  
+                | shell_pipe_expr "|" shell_redirect_expr -> pipe
+
+?shell_redirect_expr: command_expr
+                    | shell_redirect_expr ">" command_expr -> redirect
 
 ?command_expr: BACKTICK command_content BACKTICK -> command
-
-?pipe_expr: command_expr "|" command_expr -> pipe
-         | pipe_expr "|" command_expr -> pipe
-
-?redirect_expr: command_expr ">" command_expr -> redirect
-             | pipe_expr ">" command_expr -> redirect
 
 // Define tokens for shell commands
 BACKTICK: "`"

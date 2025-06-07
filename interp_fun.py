@@ -6,7 +6,7 @@ from typing import Dict
 
 
 
-type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App | Assign | Seq | Show | Command | Pipe | Redirect | If | And | Or | Not | Eq | Lt
+type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App | Assign | Seq | Show | Command | Pipe | Redirect | If | And | Or | Not | Eq | Lt | Gt | ShellAnd | ShellOr | StrLit
 #| Read | Show | Assign | Seq
 
 
@@ -16,12 +16,12 @@ type Expr = Add | Sub | Mul | Div | Neg | Lit | Let | Name | Ifnz | Letfun | App
 # Literals
 class Store:
     def __init__(self):
-        self._data = []  # Use a list instead of dict since we need sequential storage
+        self._data = []  
         self._next_loc = 0
 
     def alloc(self, value):
         loc = self._next_loc
-        self._data.append(value)  # Simply append to list
+        self._data.append(value)  # Append to list
         self._next_loc += 1
         return loc
 
@@ -64,6 +64,13 @@ class Lit:
         self.value = value
 
         self.type = type(value)
+
+
+# Added string literal
+@dataclass
+class StrLit:
+    value: str
+    __match_args__ = ('value',)
 
 
 
@@ -213,6 +220,11 @@ class Lt:
     __match_args__ = ('left', 'right')
 
 
+@dataclass
+class Gt:
+    left: Expr
+    right: Expr
+    __match_args__ = ('left', 'right')
 
 # Conditionals 
 
@@ -284,6 +296,21 @@ class Redirect:
 
     __match_args__ = ('command','stream', 'target')
 
+
+#Operator 3 - Sequential execution (runs second command only if first succeeds)
+@dataclass
+class ShellAnd:
+    left: 'Command | Pipe | Redirect | ShellAnd | ShellOr'
+    right: 'Command | Pipe | Redirect | ShellAnd | ShellOr'
+    __match_args__ = ('left', 'right')
+
+
+#Operator 4 - Alternative execution (runs second command only if first fails)
+@dataclass
+class ShellOr:
+    left: 'Command | Pipe | Redirect | ShellAnd | ShellOr'
+    right: 'Command | Pipe | Redirect | ShellAnd | ShellOr'
+    __match_args__ = ('left', 'right')
 
 
 @dataclass
@@ -383,8 +410,7 @@ class EvalError(Exception):
     pass
 
 
-type Value = int | Closure
-
+type Value = int | Closure | str | bool
 
 @dataclass
 
@@ -412,19 +438,27 @@ def evalInEnv(env: Env, store: Store, e: Expr):
 
             return value
 
+        case StrLit(value):
+            return value
+
             
 
         case Add(left, right):
-
             l = evalInEnv(env, store, left)
-
             r = evalInEnv(env, store, right)
+            
+            # Support both integer addition and string concatenation
+            if isinstance(l, int) and isinstance(r, int):
+                return l + r
+            elif isinstance(l, str) and isinstance(r, str):
+                return l + r
+            elif isinstance(l, str) and isinstance(r, int):
+                return l + str(r)
+            elif isinstance(l, int) and isinstance(r, str):
+                return str(l) + r
+            else:
+                raise TypeError(f"Add expects integers or strings, got {type(l).__name__} and {type(r).__name__}")
 
-            if not all(isinstance(x, int) for x in (l, r)):
-
-                raise TypeError("Add expects integers")
-
-            return l + r
             
 
         case Sub(left, right):
@@ -559,6 +593,13 @@ def evalInEnv(env: Env, store: Store, e: Expr):
                 raise TypeError("Lt expects integers")
             return l < r
 
+        case Gt(left, right):
+            l = evalInEnv(env, store, left)
+            r = evalInEnv(env, store, right)
+            if not all(isinstance(x, int) for x in (l, r)):
+                raise TypeError("Gt expects integers")
+            return l > r
+
         case If(cond, then_branch, else_branch):
             test = evalInEnv(env, store, cond)
             if not isinstance(test, bool):
@@ -606,107 +647,59 @@ def evalInEnv(env: Env, store: Store, e: Expr):
         # -- Shell -- #
 
         case Command(command_string):
-
             # Split the command into parts
-
             parts = command_string.split()
-
             processed_parts = []
-
             
-
             # Process each part for variable substitution
-
             for part in parts:
-
                 if part.startswith('$'):
-
                     var_name = part[1:]
-
-                    var_value = lookupEnv(var_name, env)
-
-                    if var_value is None:
-
+                    loc = lookupEnv(var_name, env)
+                    if loc is None:
                         raise EvalError(f"Undefined variable: {var_name}")
-
+                    var_value = store.get(loc)
                     processed_parts.append(str(var_value))
-
                 else:
-
                     processed_parts.append(part)
-
             
-
-            # Ensure we have at least one part (the command)
-
+            # Make sure we have at least one part (the command)
             if not processed_parts:
-
                 raise EvalError("Empty command")
-
             
-
             return {
-
                 'type': 'command',
-
                 'executable': processed_parts[0],
-
                 'args': processed_parts[1:],
-
                 'redirects': {}
-
             }
 
             
 
         case Pipe(left, right):
-
-  
-
-            left_value = eval(left, env)
-
-            right_value = eval(right, env)
-
+            left_value = evalInEnv(env, store, left)
+            right_value = evalInEnv(env, store, right)
             
-
             if left_value['type'] != 'command':
-
                 raise ValueError("Left side of pipe must be a command")
-
             if right_value['type'] != 'command':
-
                 raise ValueError("Right side of pipe must be a command")
-
             
-
             # Unpack left_value, and append right_value to pipes
-
             return {
-
                 **left_value, 'pipes': [*left_value.get('pipes', []), right_value]
-
             }
-
             
 
         case Redirect(command, stream, target):
-
             if stream not in ['stdin', 'stdout', 'stderr']:
-
                 raise ValueError(f"Invalid stream: {stream}")
-
             
-
-            #Exec IN FUTURE
-
-            value = eval(command, env)
-
+            # Never got to execing lol 
+            value = evalInEnv(env, store, command)
             
-
             return {
-
                 **value, 'redirects': [value.get('redirects', []), {stream: target}]
-
             }
 
             
@@ -731,9 +724,7 @@ def evalInEnv(env: Env, store: Store, e: Expr):
             loc = store.alloc(c)
 
             newEnv = extendEnv(n, loc, env)
-
-            # Update the closure's environment to include itself for recursion
-
+            
             c.env = newEnv        
 
             return evalInEnv(newEnv, store, i)
@@ -749,7 +740,7 @@ def evalInEnv(env: Env, store: Store, e: Expr):
                     newEnv = extendEnv(p, arg_loc, cenv) 
                     return evalInEnv(newEnv, store, b)
                 case _:
-                    raise EvalError("application of non-function")
+                    raise EvalError ("application of non-function")
 
         case Seq(first, second):
             evalInEnv(env, store, first)   # Evaluate the first expression, discard its result
@@ -758,9 +749,55 @@ def evalInEnv(env: Env, store: Store, e: Expr):
         case Read():
             s = input("Enter an integer: ")
             try:
+                # Remove quotes if they exist
+                s = s.strip().strip("'\"")
                 return int(s)
             except Exception:
                 raise EvalError("Input was not an integer")
+
+
+        case ShellAnd(left, right):
+            left_value = evalInEnv(env, store, left)
+            
+            # Check if left operand is a shell command
+            if not isinstance(left_value, dict) or left_value.get('type') != 'command':
+                raise ValueError("Left side of shell && must be a command")
+            
+            right_value = evalInEnv(env, store, right)
+            
+            # Check if right operand is a shell command  
+            if not isinstance(right_value, dict) or right_value.get('type') != 'command':
+                raise ValueError("Right side of shell && must be a command")
+            
+            # Return a combined command structure
+            return {
+                'type': 'command',
+                'executable': 'shell_and',
+                'left_cmd': left_value,
+                'right_cmd': right_value,
+                'operator': '&&'
+            }
+
+        case ShellOr(left, right):
+            left_value = evalInEnv(env, store, left)
+            
+            # Check if left operand is a shell command
+            if not isinstance(left_value, dict) or left_value.get('type') != 'command':
+                raise ValueError("Left side of shell || must be a command")
+            
+            right_value = evalInEnv(env, store, right)
+            
+            # Check if right operand is a shell command  
+            if not isinstance(right_value, dict) or right_value.get('type') != 'command':
+                raise ValueError("Right side of shell || must be a command")
+            
+            return {
+                'type': 'command',
+                'executable': 'shell_or',
+                'left_cmd': left_value,
+                'right_cmd': right_value,
+                'operator': '||'
+            }
 
 
 def run(e: Expr) -> None:

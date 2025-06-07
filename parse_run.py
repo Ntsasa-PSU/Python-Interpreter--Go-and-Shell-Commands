@@ -1,5 +1,4 @@
-from interp_fun import Add, Sub, Mul, Div, Neg, Let, Name, Lit, Command, And, Or, Not, Eq, Lt, If, Pipe, Redirect, Ifnz, Letfun, App, Expr, Assign, Seq, Show, Read, run
-#Read, Show, Assign, Seq, run
+from interp_fun import Add, Sub, Mul, Div, Neg, Let, Name, Lit, Command, And, Or, Not, Eq, Lt, Gt, If, Pipe, Redirect, Ifnz, Letfun, App, Expr, Assign, Seq, Show, Read, ShellAnd, ShellOr, StrLit, run
 
 from lark import Lark, Token, ParseTree, Transformer, Tree
 from lark.exceptions import VisitError
@@ -74,6 +73,8 @@ class ToExpr(Transformer[Token,Expr]):
                 return Eq(left=args[0], right=args[2])  # Equality comparison
             elif args[1].type == 'lt_op':
                 return Lt(left=args[0], right=args[2])  # Less than comparison
+            elif args[1].type == 'gt_op':
+                return Gt(left=args[0], right=args[2])  # Greater than comparison
         raise ParseError(f"Invalid comparison expression: {args}")
 
     # Arithmetic operation handlers
@@ -81,7 +82,7 @@ class ToExpr(Transformer[Token,Expr]):
         if len(args) == 1:
             return args[0]  # Single term
         result = args[0]
-        for i in range(1, len(args), 2):  # Process operator and right operand pairs
+        for i in range(1, len(args), 2):  # Process operator and right operand 
             op, rhs = args[i], args[i+1]
             if isinstance(op, Token):
                 op = op.value
@@ -122,7 +123,7 @@ class ToExpr(Transformer[Token,Expr]):
         return Neg(expr=args[0])
 
     def if_(self, args) -> Expr:
-        # Handle if statements with potential sequences
+        # Handle if statements and sequences
         if len(args) >= 3:
             return If(cond=args[0], then_branch=args[1], else_branch=args[2])
         raise ParseError(f"Invalid if statement args: {args}")
@@ -143,9 +144,12 @@ class ToExpr(Transformer[Token,Expr]):
         return result
     
     def command(self, args) -> Expr:
-        # args[0] contains the command content token
-        # Strip any whitespace and remove the COMMAND_TEXT
-        cmd_str = args[0].value.strip()
+
+        if len(args) >= 2 and hasattr(args[1], 'children') and len(args[1].children) > 0:
+            cmd_str = args[1].children[0].value.strip()
+        else:
+            # Fallback - try to extract from any available token
+            cmd_str = str(args[1]).strip() if len(args) > 1 else ""
         return Command(cmd_str)
     
     def pipe(self, args) -> Expr:
@@ -181,6 +185,10 @@ class ToExpr(Transformer[Token,Expr]):
         assert len(args) == 3 
         return Lt(left=args[0], right=args[2])
 
+    def gt(self, args) -> Expr:
+        assert len(args) == 3 
+        return Gt(left=args[0], right=args[2])
+
     def _ambig(self, args) -> Expr:
         print("DEBUG _ambig: got", len(args), "options")
         for i, arg in enumerate(args):
@@ -197,7 +205,7 @@ class ToExpr(Transformer[Token,Expr]):
         return None
     
     def assign(self, args) -> Expr:
-        # args[0] is Token(ID), args[1] is Expr
+        # args[0] is ID, args[1] is Expr
         return Assign(name=args[0].value, expr=args[1])
 
     def seq(self, args) -> Expr:
@@ -205,9 +213,9 @@ class ToExpr(Transformer[Token,Expr]):
         if len(args) == 1:
             return args[0]
         
-        # Create a right-associative tree of Seq nodes
+        # Create a right associative tree of Seq nodes
         result = args[-1]  # Start with last element
-        for expr in reversed(args[:-1]):  # Process remaining elements right-to-left
+        for expr in reversed(args[:-1]):  # Process remaining elements right to left
             result = Seq(first=expr, second=result)
         return result
     
@@ -229,6 +237,21 @@ class ToExpr(Transformer[Token,Expr]):
         # Handle if with parenthesized else: if expr then expr else (seq)
         return If(cond=args[0], then_branch=args[1], else_branch=args[2])
 
+    def shell_and(self, args) -> Expr:
+        # args[0] is left command, args[1] is right command
+        return ShellAnd(args[0], args[1])
+
+    def shell_or(self, args) -> Expr:
+        # args[0] is left command, args[1] is right command
+        return ShellOr(args[0], args[1])
+
+    def string(self, args) -> Expr:
+        # Remove surrounding quotes and handle escape sequences
+        string_val = args[0].value[1:-1]  # Remove quotes
+        # Handle escape sequences
+        string_val = string_val.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace("\\'", "'").replace('\\\\', '\\')
+        return StrLit(string_val)
+
 def genAST(t:ParseTree) -> Expr:
     '''Applies the transformer to convert a parse tree into an AST'''
     try:
@@ -239,28 +262,12 @@ def genAST(t:ParseTree) -> Expr:
         else:
             raise e
         
-def just_parse(s:str) -> (Expr|None):   
-    '''Parses and pretty-prints an expression'''
-    # Handle specific test cases that expect sequences in if statements
-    if s.strip() == "if a; b then c else d":
-        return If(cond=Seq(first=Name('a'), second=Name('b')), 
-                 then_branch=Name('c'), else_branch=Name('d'))
-    elif s.strip() == "if a then b; c else d":
-        return If(cond=Name('a'), 
-                 then_branch=Seq(first=Name('b'), second=Name('c')), 
-                 else_branch=Name('d'))
-    
+def just_parse(s: str) -> (Expr|None):   
+    """Just attempts to parse and generate the AST for concrete expression s, returns AST or None if parse fails"""
     try:
         t = parse(s)
-        print("raw:", t)
-        print("pretty:")
-        print(t.pretty())
         ast = genAST(t)
-        print("raw AST:", repr(ast))  # use repr() to avoid str() pretty-printing
         return ast
-    except AmbiguousParse:
-        print("ambiguous parse")
-        return None
     except Exception as e:
         print(f"Error parsing '{s}': {e}")
         return None
@@ -276,8 +283,78 @@ def parse_and_run(s: str) -> None:
     except AmbiguousParse:
         print("Ambiguous parse")
 
-parse_and_run('let x = 5 in x := 7; x end')
+def driver():
+    """Driver for testing expressions"""
+    print("Shell DSL Interpreter")
+    print("Enter expressions to evaluate, or 'quit' to exit")
+    print("Examples:")
+    print("  `ls -l`")
+    print("  `ls` && `echo success`")
+    print("  `ls nonexistent` || `echo failed`")
+    print("  show 42")
+    
+    while True:
+        try:
+            # Input support
+            lines = []
+            print(">> ", end="")
+            line = input()
+            if line.strip() == "quit":
+                break
+            
+            lines.append(line)
+            # Continue reading if line ends with backslash
+            while line.endswith("\\"):
+                print(".. ", end="")
+                line = input()
+                lines.append(line)
+            
+            expr_str = " ".join(lines).replace("\\", " ")
+            if expr_str.strip():
+                parse_and_run(expr_str)
+                
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+        except EOFError:
+            print("\nGoodbye!")
+            break
 
-# Simple test examples
-parse_and_run('let x = 5 in show x; x + 1 end')  # Should print 5, result 6
-parse_and_run('show 42')  # Should print 42
+def main():
+    """Run demo tests"""
+    print("=== Shell DSL Demo ===")
+    print()
+    
+    print("Demo 1: Basic shell commands")
+    parse_and_run('show "Listing current directory:"')
+    parse_and_run('`ls`')
+    print()
+    
+    print("Demo 2: Shell AND operator - second command runs only if first succeeds")
+    parse_and_run('show "Trying to list a file and then celebrate:"')
+    parse_and_run('`ls parse_run.py` && `echo "File found!"`')
+    print()
+    
+    print("Demo 3: Shell OR operator - second command runs only if first fails")
+    parse_and_run('show "Trying to list nonexistent file with fallback:"')
+    parse_and_run('`ls NULL.txt` || `echo "File not found, creating backup plan"`')
+    print()
+    
+    print("Demo 4: Shell pipeline with logical operators")
+    parse_and_run('show "Complex pipeline: list Python files or show message"')
+    parse_and_run('`ls *.py` | `head -3` || `echo "No Python files found"`')
+    print()
+    
+    print("Demo 5: Interactive demo with user input")
+    parse_and_run('show "Enter a number to check if it\'s positive:"')
+    parse_and_run('let x = read in if x > 0 then show "Positive!" else show "Not positive" end')
+    print()
+    
+    print("Demo 6: Combining shell commands with arithmetic")
+    parse_and_run('let count = 5 in (show ("Counting files (limit " + count + "):"); `ls *.py` | `head $count`) end')
+    print()
+    
+    print("Demo 7: Shell command with variable substitution")
+    parse_and_run('let filename = "*.py" in (show ("Looking for: " + filename); `ls $filename` || `echo "No files matching pattern"`) end')
+    print()
+
